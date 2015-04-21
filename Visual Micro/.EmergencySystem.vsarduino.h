@@ -80,10 +80,15 @@ extern "C" void __cxa_pure_virtual() {;}
 #define portInputRegister(P)
 #define portModeRegister(P)
 
+void onButtonPress();
+void onButtonLongPress();
 void setServoOut( unsigned int servoValue );
-void setup_timer1();
+void setupTimer1();
+void setupPinChangeInterrupt();
 //
 //
 
 #include <EmergensySystem.ino>
+#include <ButtonWatcher.cpp>
+#include <ButtonWatcher.h>
 #endif

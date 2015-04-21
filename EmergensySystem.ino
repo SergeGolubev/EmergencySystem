@@ -1,10 +1,15 @@
 #include <util/atomic.h>
+#include "ButtonWatcher.h"
 
 // Пины
 #define SERVO_IN_PIN 8 // входной сигнал сервы
 #define SERVO_OUT_PIN 10 // выход сервы
 #define LED_PIN 13 // светодиод
+
 #define BUTTON_PIN 4 // кнопка
+#define BUTTON_PIN_REG PIND
+#define BUTTON_PIN_FLAG PIND4
+ 
 
 int ledState = LOW;             // ledState used to set the LED
 
@@ -31,6 +36,21 @@ volatile unsigned int servoInput = 0; // в микросекундах
 #define SERVO_MAX 2000
 #define SERVO_MIN 1000
 
+volatile bool reportPress = false;
+volatile bool reportLongPress = false;
+
+void onButtonPress()
+{
+	reportPress= true;
+}
+
+void onButtonLongPress()
+{
+	reportLongPress = true;
+}
+
+static CButtonWatcher buttonWatcher( onButtonPress, onButtonLongPress );
+
 void setServoOut( unsigned int servoValue )
 {
 	ATOMIC_BLOCK( ATOMIC_RESTORESTATE )
@@ -39,7 +59,7 @@ void setServoOut( unsigned int servoValue )
 	}
 }
 
-void setup_timer1()
+void setupTimer1()
 {
 	ATOMIC_BLOCK( ATOMIC_RESTORESTATE )
 	{
@@ -118,6 +138,26 @@ ISR( TIMER1_OVF_vect )
 	}
 }
 
+void setupPinChangeInterrupt()
+{
+	ATOMIC_BLOCK( ATOMIC_RESTORESTATE ) 
+	{
+		// digital pin 4 is PCINT20 pin and correspond to pin change interrupt 2
+		PCICR |= _BV( PCIE2 ); // enable pin change interrupt 2
+		PCMSK2 |= _BV( PCINT20 ); // enable interrupt on PCINT20 pin
+	}
+}
+
+// pin change interrupt 2 routine
+ISR( PCINT2_vect )
+{
+	ATOMIC_BLOCK( ATOMIC_RESTORESTATE ) 
+	{
+		bool isButtonPressed = bit_is_set( BUTTON_PIN_REG, BUTTON_PIN_FLAG );
+		buttonWatcher.UpdateButtonState( isButtonPressed );
+	}
+}
+
 void setup() 
 {
 	pinMode( LED_PIN, OUTPUT );
@@ -125,7 +165,8 @@ void setup()
 	pinMode( BUTTON_PIN, INPUT );
 	pinMode( SERVO_IN_PIN, INPUT );
 	
-	setup_timer1();
+	setupTimer1();
+	setupPinChangeInterrupt();
 
 	Serial.begin( 9600 );
 	Serial.print( "Finished setup\r\n" );
@@ -156,25 +197,42 @@ void loop()
 	}
 
 	if( currentMillis - prevRead >= ReadInterval ) {
-	buttonState = digitalRead( BUTTON_PIN );
-	prevRead = currentMillis;
-
-	static int prevState = LOW;	
-	if( buttonState == HIGH && prevState == LOW ) {
-		unsigned int sinp = 0;
-		int ov = 0;
-		ATOMIC_BLOCK( ATOMIC_RESTORESTATE )
+		ATOMIC_BLOCK( ATOMIC_RESTORESTATE ) 
 		{
-		sinp = servoInput;
-		ov = overflowCount;
+			bool isButtonPressed = bit_is_set( BUTTON_PIN_REG, BUTTON_PIN_FLAG );
+			buttonWatcher.UpdateButtonState( isButtonPressed );
 		}
-		setServoOut( sinp );
-		Serial.print( "Servo input: " );
-		Serial.print( sinp );
-		Serial.print( "\r\n" );
-		Serial.print( ov );
-		Serial.print( "\r\n" );
-	}
-	prevState = buttonState;
+
+		if( reportPress ) {
+			Serial.print( "Press!\r\n" );
+			reportPress = false;
+		}
+		if( reportLongPress ) {
+			Serial.print( "Long press!\r\n" );
+			reportLongPress = false;
+		}
+
+		prevRead = currentMillis;
+
+		/*buttonState = digitalRead( BUTTON_PIN );
+		prevRead = currentMillis;
+
+		static int prevState = LOW;	
+		if( buttonState == HIGH && prevState == LOW ) {
+			unsigned int sinp = 0;
+			int ov = 0;
+			ATOMIC_BLOCK( ATOMIC_RESTORESTATE )
+			{
+			sinp = servoInput;
+			ov = overflowCount;
+			}
+			setServoOut( sinp );
+			Serial.print( "Servo input: " );
+			Serial.print( sinp );
+			Serial.print( "\r\n" );
+			Serial.print( ov );
+			Serial.print( "\r\n" );
+		}
+		prevState = buttonState;*/
 	}
 }
