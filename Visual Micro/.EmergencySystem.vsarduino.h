@@ -82,7 +82,9 @@ extern "C" void __cxa_pure_virtual() {;}
 
 void onButtonPress();
 void onButtonLongPress();
+void setEscOut( unsigned int escValue );
 void setServoOut( unsigned int servoValue );
+inline void processEscInput();
 void setupTimer1();
 void setupPinChangeInterrupt();
 //
