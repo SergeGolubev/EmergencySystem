@@ -3,20 +3,18 @@
 
 // Class to handle button presses with debounce.
 
-// Callback is called when button press is detected or long press is detected.
-typedef void (*TButtonPressCallback)();
-
 class CButtonWatcher {
 public:
-	// callbacks can be zero
-	CButtonWatcher( TButtonPressCallback pressCallback, TButtonPressCallback longPressCallbac );
+	// watcher sets report flags when detects press or long press
+	// user can then check flag state, do some actions, reset flag etc.
+	CButtonWatcher( bool* pressFlag, bool* longPressFlag );
 
 	// call this every time the pin state changes and time to time in a loop
 	void UpdateButtonState( bool isPressed );
 	
 private:
-	TButtonPressCallback pressCallback;
-	TButtonPressCallback longPressCallbac;
+	bool* pressFlag;
+	bool* longPressFlag;
 
 	volatile bool prevState; // actual state of button pin
 	volatile bool isButtonPressed; // do WE consider button pressed

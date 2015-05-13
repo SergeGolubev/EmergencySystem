@@ -5,9 +5,9 @@
 static const long DebounceTimeout = 100; // 100 ms timeout
 static const long LongPressTimeout = 3000; // 3 s press is a long press
 
-CButtonWatcher::CButtonWatcher( TButtonPressCallback _pressCallback, TButtonPressCallback _longPressCallbac ) :
-	pressCallback( _pressCallback ),
-	longPressCallbac( _longPressCallbac ),
+CButtonWatcher::CButtonWatcher( bool* _pressFlag, bool* _longPressFlag ) :
+	pressFlag( _pressFlag ),
+	longPressFlag( _longPressFlag ),
 	prevState( false ),
 	isButtonPressed( false ),
 	isLongPressDetected( false ),
@@ -36,8 +36,8 @@ void CButtonWatcher::onPress()
 	if( !isButtonPressed ) {
 		isButtonPressed = true;
 		timeDown = millis();
-		if( pressCallback != 0 ) {
-			pressCallback();
+		if( pressFlag != 0 ) {
+			*pressFlag = true;
 		}
 	}
 }
@@ -60,10 +60,10 @@ void CButtonWatcher::onSameState()
 	} else if( isButtonPressed // we consider button is pressed
 		&& !isLongPressDetected // and we didn't catch long press yet
 		&& ( time - timeDown ) > LongPressTimeout // and button is pressed long enough
-		&& longPressCallbac != 0 ) // and we have callback
+		&& longPressFlag != 0 ) // and we have callback
 	{
 		// catch long press
-		longPressCallbac();
+		*longPressFlag = true;
 		isLongPressDetected = true;
 	}
 }

@@ -21,28 +21,25 @@
 // 20 ms servo update period - 40000 tacts
 #define TIMER1_TOP 40000
 
+// Arm/Disarm button
+#define BUTTON_ARM_PIN 3
+#define BUTTON_ARM_REG PIND
+#define BUTTON_ARM_FLAG PIND3
 
+// Servo control button
+#define BUTTON_SRV_PIN 4
+#define BUTTON_SRV_REG PIND
+#define BUTTON_SRV_FLAG PIND4
 
 #define LED_PIN 13 // светодиод
-
-#define BUTTON_PIN 4 // кнопка
-#define BUTTON_PIN_REG PIND
-#define BUTTON_PIN_FLAG PIND4
-
-
- 
-
 int ledState = LOW;             // ledState used to set the LED
 
-// Generally, you should use "unsigned long" for variables that hold time
-// The value will quickly become too large for an int to store
-unsigned long previousMillis = 0;        // will store last time LED was updated
+
 
 // constants won't change :
 long interval = 1000;           // interval at which to blink (milliseconds)
 
-const int ReadInterval = 50;
-unsigned long prevRead = 0;
+
 
 int buttonState = LOW;
 
@@ -51,22 +48,21 @@ int buttonState = LOW;
 #define SERVO_MAX 2000
 #define SERVO_MIN 1000
 
-volatile bool reportPress = false;
-volatile bool reportLongPress = false;
+
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Button processing
 
-void onButtonPress()
-{
-	reportPress= true;
-}
+volatile bool armButtonPress = false;
+volatile bool armButtonLongPress = false;
+static CButtonWatcher armDisarmButtonWatcher( &armButtonPress, &armButtonLongPress );
 
-void onButtonLongPress()
-{
-	reportLongPress = true;
-}
+volatile bool servoButtonPress = false;
+volatile bool servoButtonLongPress = false;
+static CButtonWatcher servoButtonWatcher( &servoButtonPress, &servoButtonLongPress );
 
-static CButtonWatcher buttonWatcher( onButtonPress, onButtonLongPress );
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Output PWM control
 
 // Set output ESC signal is microseconds
 void setEscOut( unsigned int escValue )
@@ -140,7 +136,6 @@ inline void processEscInput()
 	}
 }
 
-
 // Pin change interrupt 2 routine
 ISR( PCINT2_vect )
 {
@@ -150,8 +145,8 @@ ISR( PCINT2_vect )
 		processEscInput();
 		
 		// process button presses
-		bool isButtonPressed = !bit_is_set( BUTTON_PIN_REG, BUTTON_PIN_FLAG );
-		buttonWatcher.UpdateButtonState( isButtonPressed );
+		armDisarmButtonWatcher.UpdateButtonState( !bit_is_set( BUTTON_ARM_REG, BUTTON_ARM_FLAG ) );
+		servoButtonWatcher.UpdateButtonState( !bit_is_set( BUTTON_SRV_REG, BUTTON_SRV_FLAG ) );
 	}
 }
 
@@ -198,9 +193,10 @@ void setupPinChangeInterrupt()
 {
 	ATOMIC_BLOCK( ATOMIC_RESTORESTATE ) 
 	{
-		// digital pins 4 (PCINT20) and 6 (PCINT22) correspond to pin change interrupt 2
+		// digital pins 3 (PCINT19), 4 (PCINT20) and 6 (PCINT22) correspond to pin change interrupt 2
 		PCICR |= _BV( PCIE2 ); // enable pin change interrupt 2
-		PCMSK2 |= _BV( PCINT20 ); // enable interrupt on PCINT20 pin (button)
+		PCMSK2 |= _BV( PCINT19 ); // enable interrupt on PCINT19 pin (Arm/Disarm button)
+		PCMSK2 |= _BV( PCINT20 ); // enable interrupt on PCINT20 pin (Servo button)
 		PCMSK2 |= _BV( PCINT22 ); // enable interrupt on PCINT22 pin (ESC input)
 	}
 }
@@ -214,7 +210,8 @@ void setup()
 	pinMode( ESC_OUT_PIN, OUTPUT );
 	pinMode( SRV_OUT_PIN, OUTPUT );
 
-	pinMode( BUTTON_PIN, INPUT_PULLUP );
+	pinMode( BUTTON_ARM_PIN, INPUT_PULLUP );
+	pinMode( BUTTON_SRV_PIN, INPUT_PULLUP );
 			
 	setupTimer1();
 	setupPinChangeInterrupt();
@@ -226,16 +223,15 @@ void setup()
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Main loop
 
+#define BUTTON_UPDATE_INTERVAL 50 // 50 ms
+
+
 void loop()
 {
-	// here is where you'd put code that needs to be running all the time.
-
-	// check to see if it's time to blink the LED; that is, if the
-	// difference between the current time and last time you blinked
-	// the LED is bigger than the interval at which you want to
-	// blink the LED.
 	unsigned long currentMillis = millis();
 
+	// LED blink
+	static unsigned long previousMillis = currentMillis;
 	if(currentMillis - previousMillis >= interval) {
 		// save the last time you blinked the LED 
 		previousMillis = currentMillis;   
@@ -250,15 +246,19 @@ void loop()
 		digitalWrite( LED_PIN, ledState );
 	}
 
-	if( currentMillis - prevRead >= ReadInterval ) {
+	// update button state
+	static unsigned long prevButtonUpdate = currentMillis;
+	if( currentMillis - prevButtonUpdate >= BUTTON_UPDATE_INTERVAL ) {
+		prevButtonUpdate = currentMillis;
 		ATOMIC_BLOCK( ATOMIC_RESTORESTATE ) 
 		{
-			bool isButtonPressed = !bit_is_set( BUTTON_PIN_REG, BUTTON_PIN_FLAG );
-			buttonWatcher.UpdateButtonState( isButtonPressed );
+			// process button presses
+			armDisarmButtonWatcher.UpdateButtonState( !bit_is_set( BUTTON_ARM_REG, BUTTON_ARM_FLAG ) );
+			servoButtonWatcher.UpdateButtonState( !bit_is_set( BUTTON_SRV_REG, BUTTON_SRV_FLAG ) );
 		}
 
-		if( reportPress ) {
-			Serial.print( "Press!\r\n" );
+		if( armButtonPress ) {
+			Serial.print( "Arm press.\r\n" );
 			unsigned int sinp = 0;
 			int ov = 0;
 			ATOMIC_BLOCK( ATOMIC_RESTORESTATE )
@@ -278,8 +278,6 @@ void loop()
 			Serial.print( "Long press!\r\n" );
 			reportLongPress = false;
 		}
-
-		prevRead = currentMillis;
 
 		/*buttonState = digitalRead( BUTTON_PIN );
 		prevRead = currentMillis;
