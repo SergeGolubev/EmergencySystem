@@ -91,4 +91,6 @@ void setupPinChangeInterrupt();
 #include <EmergensySystem.ino>
 #include <ButtonWatcher.cpp>
 #include <ButtonWatcher.h>
+#include <LedController.cpp>
+#include <LedController.h>
 #endif

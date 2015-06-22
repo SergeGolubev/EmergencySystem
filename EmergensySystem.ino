@@ -1,5 +1,6 @@
 #include <util/atomic.h>
 #include "ButtonWatcher.h"
+#include "LedController.h"
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -32,7 +33,7 @@
 #define BUTTON_SRV_FLAG PIND4
 
 #define LED_PIN 13 // светодиод
-int ledState = LOW;             // ledState used to set the LED
+CLedController ledController( LED_PIN );
 
 
 
@@ -241,17 +242,7 @@ void loop()
 	// LED blink
 	static unsigned long previousMillis = currentMillis;
 	if(currentMillis - previousMillis >= interval) {
-		// save the last time you blinked the LED 
-		previousMillis = currentMillis;   
-
-		// if the LED is off turn it on and vice-versa:
-		if (ledState == LOW)
-		  ledState = HIGH;
-		else
-		  ledState = LOW;
-
-		// set the LED with the ledState of the variable:
-		digitalWrite( LED_PIN, ledState );
+		ledController.UpdateState( currentMillis );
 	}
 
 	// update button state
@@ -267,7 +258,8 @@ void loop()
 
 		if( armButtonPress ) {
 			Serial.print( "Arm press.\r\n" );
-			unsigned int sinp = 0;
+			ledController.TurnOn();
+			/*unsigned int sinp = 0;
 			int ov = 0;
 			ATOMIC_BLOCK( ATOMIC_RESTORESTATE )
 			{
@@ -279,17 +271,19 @@ void loop()
 			Serial.print( sinp );
 			Serial.print( "\r\n" );
 			Serial.print( ov );
-			Serial.print( "\r\n" );
+			Serial.print( "\r\n" );*/
 			armButtonPress = false;
 		}
 		if( armButtonLongPress ) {
 			Serial.print( "Arm long press.\r\n" );
+			ledController.BlinkConstantly( 500 );
 			armButtonLongPress = false;
 		}
 
 		if( servoButtonPress ) {
 			Serial.print( "Servo press.\r\n" );
-			unsigned int sinp = 0;
+			ledController.BlinkShort( 100, 7 );
+			/*unsigned int sinp = 0;
 			int ov = 0;
 			ATOMIC_BLOCK( ATOMIC_RESTORESTATE )
 			{
@@ -301,11 +295,12 @@ void loop()
 			Serial.print( sinp );
 			Serial.print( "\r\n" );
 			Serial.print( ov );
-			Serial.print( "\r\n" );
+			Serial.print( "\r\n" );*/
 			servoButtonPress = false;
 		}
 		if( servoButtonLongPress ) {
 			Serial.print( "Servo long press.\r\n" );
+			ledController.TurnOff();
 			servoButtonLongPress = false;
 		}
 

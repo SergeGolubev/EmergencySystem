@@ -173,6 +173,14 @@
 				RelativePath=".\ButtonWatcher.h"
 				>
 			</File>
+			<File
+				RelativePath=".\LedController.cpp"
+				>
+			</File>
+			<File
+				RelativePath=".\LedController.h"
+				>
+			</File>
 		</Filter>
 		<Filter
 			Name="Header Files"
