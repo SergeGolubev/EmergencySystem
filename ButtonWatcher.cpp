@@ -5,7 +5,7 @@
 static const long DebounceTimeout = 100; // 100 ms timeout
 static const long LongPressTimeout = 3000; // 3 s press is a long press
 
-CButtonWatcher::CButtonWatcher( bool* _pressFlag, bool* _longPressFlag ) :
+CButtonWatcher::CButtonWatcher( volatile bool* _pressFlag, volatile bool* _longPressFlag ) :
 	pressFlag( _pressFlag ),
 	longPressFlag( _longPressFlag ),
 	prevState( false ),

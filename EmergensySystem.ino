@@ -4,12 +4,12 @@
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 // ESC input
-#define ESC_IN_PIN 6 // ESC inpit pin
-#define ESC_IN_PIN_REG PIND // pin 6 is ATmega pin D6 in port D
-#define ESC_IN_PIN_FLAG PIND6 // pin D6
+#define ESC_IN_PIN 8 // ESC inpit pin
+#define ESC_IN_PIN_REG PINB // pin 6 is ATmega pin B0 in port B
+#define ESC_IN_PIN_FLAG PINB0 // pin D6
 
 // ESC outpit
-#define ESC_OUT_PIN 11 // ESC output pin (this is OC1A ATmega pin)
+#define ESC_OUT_PIN 9 // ESC output pin (this is OC1A ATmega pin)
 #define ESC_OUT_REG OCR1A // register to write output
 
 // Servo output
@@ -136,14 +136,20 @@ inline void processEscInput()
 	}
 }
 
+// Pin change interrupt 0 routine
+ISR( PCINT0_vect )
+{
+	ATOMIC_BLOCK( ATOMIC_RESTORESTATE ) 
+	{
+		processEscInput();
+	}
+}
+
 // Pin change interrupt 2 routine
 ISR( PCINT2_vect )
 {
 	ATOMIC_BLOCK( ATOMIC_RESTORESTATE ) 
 	{
-		// process Esc input first for more precision
-		processEscInput();
-		
 		// process button presses
 		armDisarmButtonWatcher.UpdateButtonState( !bit_is_set( BUTTON_ARM_REG, BUTTON_ARM_FLAG ) );
 		servoButtonWatcher.UpdateButtonState( !bit_is_set( BUTTON_SRV_REG, BUTTON_SRV_FLAG ) );
@@ -193,11 +199,14 @@ void setupPinChangeInterrupt()
 {
 	ATOMIC_BLOCK( ATOMIC_RESTORESTATE ) 
 	{
-		// digital pins 3 (PCINT19), 4 (PCINT20) and 6 (PCINT22) correspond to pin change interrupt 2
+		// digital pin 8 (PCINT0) corresponds to pin change interrupt 0
+		PCICR |= _BV( PCIE0 ); // enable pin change interrupt 0
+		PCMSK0 |= _BV( PCINT0 ); // enable interrupt on PCINT0 pin (Esc input)
+		
+		// digital pins 3 (PCINT19), 4 (PCINT20) correspond to pin change interrupt 2
 		PCICR |= _BV( PCIE2 ); // enable pin change interrupt 2
 		PCMSK2 |= _BV( PCINT19 ); // enable interrupt on PCINT19 pin (Arm/Disarm button)
 		PCMSK2 |= _BV( PCINT20 ); // enable interrupt on PCINT20 pin (Servo button)
-		PCMSK2 |= _BV( PCINT22 ); // enable interrupt on PCINT22 pin (ESC input)
 	}
 }
 
@@ -224,7 +233,6 @@ void setup()
 // Main loop
 
 #define BUTTON_UPDATE_INTERVAL 50 // 50 ms
-
 
 void loop()
 {
@@ -272,23 +280,20 @@ void loop()
 			Serial.print( "\r\n" );
 			Serial.print( ov );
 			Serial.print( "\r\n" );
-			reportPress = false;
+			armButtonPress = false;
 		}
-		if( reportLongPress ) {
-			Serial.print( "Long press!\r\n" );
-			reportLongPress = false;
+		if( armButtonLongPress ) {
+			Serial.print( "Arm long press.\r\n" );
+			armButtonLongPress = false;
 		}
 
-		/*buttonState = digitalRead( BUTTON_PIN );
-		prevRead = currentMillis;
-
-		static int prevState = LOW;	
-		if( buttonState == HIGH && prevState == LOW ) {
+		if( servoButtonPress ) {
+			Serial.print( "Servo press.\r\n" );
 			unsigned int sinp = 0;
 			int ov = 0;
 			ATOMIC_BLOCK( ATOMIC_RESTORESTATE )
 			{
-			sinp = servoInput;
+			sinp = escInput;
 			ov = overflowCount;
 			}
 			setServoOut( sinp );
@@ -297,7 +302,12 @@ void loop()
 			Serial.print( "\r\n" );
 			Serial.print( ov );
 			Serial.print( "\r\n" );
+			servoButtonPress = false;
 		}
-		prevState = buttonState;*/
+		if( servoButtonLongPress ) {
+			Serial.print( "Servo long press.\r\n" );
+			servoButtonLongPress = false;
+		}
+
 	}
 }
