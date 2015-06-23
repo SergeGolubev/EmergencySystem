@@ -83,6 +83,9 @@ extern "C" void __cxa_pure_virtual() {;}
 void setEscOut( unsigned int escValue );
 void setServoOut( unsigned int servoValue );
 inline void processEscInput();
+inline void onHeatbeatCapture();
+inline void onHeartbeatLost();
+inline void processHeartbeat();
 void setupTimer1();
 void setupPinChangeInterrupt();
 //

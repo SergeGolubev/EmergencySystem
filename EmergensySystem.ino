@@ -7,7 +7,15 @@
 // ESC input
 #define ESC_IN_PIN 8 // ESC inpit pin
 #define ESC_IN_PIN_REG PINB // pin 6 is ATmega pin B0 in port B
-#define ESC_IN_PIN_FLAG PINB0 // pin D6
+#define ESC_IN_PIN_FLAG PINB0 // pin B0
+
+// Heartbeat input
+#define HEARTBEAT_IN_PIN 6
+#define HEARTBEAT_IN_PIN_REG PIND
+#define HEARTBEAT_IN_PIN_FLAG PIND5
+#define HEARTBEAT_TIMEOUT 100 // max timeout between heartbeat pulses in milliseconds
+#define HEARTBEAT_CAPTURE_TIMEOUT 1000 // in milliseconds
+#define HEARTBEAT_UPDATE_INTERVAL HEARTBEAT_TIMEOUT / 4
 
 // ESC outpit
 #define ESC_OUT_PIN 9 // ESC output pin (this is OC1A ATmega pin)
@@ -32,24 +40,24 @@
 #define BUTTON_SRV_REG PIND
 #define BUTTON_SRV_FLAG PIND4
 
-#define LED_PIN 13 // светодиод
-CLedController ledController( LED_PIN );
+// Button state update interval
+#define BUTTON_UPDATE_INTERVAL 50 // 50 ms
 
-
-
-// constants won't change :
-long interval = 1000;           // interval at which to blink (milliseconds)
-
-
-
-int buttonState = LOW;
-
-
-
+// Max/Min values for servo input and output in misroseconds
 #define SERVO_MAX 2000
 #define SERVO_MIN 1000
 
 
+
+
+
+
+
+#define LED_PIN 13
+CLedController ledController( LED_PIN );
+
+// constants won't change :
+long interval = 1000;
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Button processing
@@ -86,7 +94,7 @@ void setServoOut( unsigned int servoValue )
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////
-// Interrupts
+// ESC input processing
 
 // timer overflow count since ESC pilse started
 volatile uint8_t overflowCount = 0; 
@@ -137,6 +145,66 @@ inline void processEscInput()
 	}
 }
 
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Heartbeat input processing
+
+volatile bool hasHeartbeat = false;
+
+inline void onHeatbeatCapture()
+{
+	ledController.TurnOn();
+}
+
+inline void onHeartbeatLost()
+{
+	ledController.BlinkConstantly( 250 );
+}
+
+inline void processHeartbeat()
+{
+	unsigned long currentMillis = millis();
+	static unsigned long prevPulseMillis = 0; // time of previous heartbeat pulse
+	static unsigned long pulsesStartMillis = 0; // time of first pulse
+
+	// check if heartbeat is lost
+	if( prevPulseMillis != 0 && currentMillis - prevPulseMillis > HEARTBEAT_TIMEOUT ) {
+		// too long time passed from prev pulse
+		if( hasHeartbeat ) {
+			hasHeartbeat = false;
+			onHeartbeatLost();
+		}
+		prevPulseMillis = 0;
+		pulsesStartMillis = 0;
+	}
+
+	// check state change
+	// pullup is enabled -> deafult state is HIGH
+	static uint8_t prevState = _BV( HEARTBEAT_IN_PIN_FLAG );
+	uint8_t state = ( HEARTBEAT_IN_PIN_REG & _BV( HEARTBEAT_IN_PIN_FLAG ) );
+	if( !( state ^ prevState ) ) {
+		// if no state schange - nothing else to do
+		return;
+	}
+	// signal is changed on heartbeat pin
+	prevState = state; // remember prev state
+	prevPulseMillis = currentMillis; // remember pulse time
+
+	if( !hasHeartbeat && pulsesStartMillis != 0 && currentMillis - pulsesStartMillis > HEARTBEAT_CAPTURE_TIMEOUT ) {
+		// have heartbeat pulses for long enough time
+		// report heartbeat capture
+		hasHeartbeat = true;
+		onHeatbeatCapture();
+	}
+
+	// remember time of first pulse in sequence
+	if( pulsesStartMillis == 0 ) {
+		pulsesStartMillis = currentMillis;
+	}
+}
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Interrupts
+
 // Pin change interrupt 0 routine
 ISR( PCINT0_vect )
 {
@@ -151,6 +219,8 @@ ISR( PCINT2_vect )
 {
 	ATOMIC_BLOCK( ATOMIC_RESTORESTATE ) 
 	{
+		// process heartbeat signal
+		processHeartbeat();
 		// process button presses
 		armDisarmButtonWatcher.UpdateButtonState( !bit_is_set( BUTTON_ARM_REG, BUTTON_ARM_FLAG ) );
 		servoButtonWatcher.UpdateButtonState( !bit_is_set( BUTTON_SRV_REG, BUTTON_SRV_FLAG ) );
@@ -204,10 +274,11 @@ void setupPinChangeInterrupt()
 		PCICR |= _BV( PCIE0 ); // enable pin change interrupt 0
 		PCMSK0 |= _BV( PCINT0 ); // enable interrupt on PCINT0 pin (Esc input)
 		
-		// digital pins 3 (PCINT19), 4 (PCINT20) correspond to pin change interrupt 2
+		// digital pins 3 (PCINT19), 4 (PCINT20), 5 (PCINT21) correspond to pin change interrupt 2
 		PCICR |= _BV( PCIE2 ); // enable pin change interrupt 2
 		PCMSK2 |= _BV( PCINT19 ); // enable interrupt on PCINT19 pin (Arm/Disarm button)
 		PCMSK2 |= _BV( PCINT20 ); // enable interrupt on PCINT20 pin (Servo button)
+		PCMSK2 |= _BV( PCINT21 ); // enable interrupt on PCINT21 pin (Heatbeat input)
 	}
 }
 
@@ -217,6 +288,7 @@ void setup()
 	pinMode( LED_PIN, OUTPUT );
 	
 	pinMode( ESC_IN_PIN, INPUT );
+	pinMode( HEARTBEAT_IN_PIN, INPUT_PULLUP );
 	pinMode( ESC_OUT_PIN, OUTPUT );
 	pinMode( SRV_OUT_PIN, OUTPUT );
 
@@ -233,8 +305,6 @@ void setup()
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Main loop
 
-#define BUTTON_UPDATE_INTERVAL 50 // 50 ms
-
 void loop()
 {
 	unsigned long currentMillis = millis();
@@ -243,6 +313,16 @@ void loop()
 	static unsigned long previousMillis = currentMillis;
 	if(currentMillis - previousMillis >= interval) {
 		ledController.UpdateState( currentMillis );
+	}
+
+	// update heartbeat state
+	static unsigned long prevHeartbeatUpdate = currentMillis;
+	if( currentMillis - prevHeartbeatUpdate >= HEARTBEAT_UPDATE_INTERVAL ) {
+		prevHeartbeatUpdate= currentMillis;
+		ATOMIC_BLOCK( ATOMIC_RESTORESTATE ) 
+		{
+			processHeartbeat();
+		}
 	}
 
 	// update button state
@@ -282,7 +362,7 @@ void loop()
 
 		if( servoButtonPress ) {
 			Serial.print( "Servo press.\r\n" );
-			ledController.BlinkShort( 100, 7 );
+			ledController.BlinkShort( 100, 6 );
 			/*unsigned int sinp = 0;
 			int ov = 0;
 			ATOMIC_BLOCK( ATOMIC_RESTORESTATE )
