@@ -6,11 +6,13 @@
 
 // ESC input
 #define ESC_IN_PIN 8 // ESC inpit pin
-#define ESC_IN_PIN_REG PINB // pin 6 is ATmega pin B0 in port B
+#define ESC_IN_PIN_REG PINB // pin 8 is ATmega pin B0 in port B
 #define ESC_IN_PIN_FLAG PINB0 // pin B0
 
+#define ESC_IN_UPDATE_INTERVAL 20 // 20 ms
+
 // Heartbeat input
-#define HEARTBEAT_IN_PIN 6
+#define HEARTBEAT_IN_PIN 5
 #define HEARTBEAT_IN_PIN_REG PIND
 #define HEARTBEAT_IN_PIN_FLAG PIND5
 #define HEARTBEAT_TIMEOUT 100 // max timeout between heartbeat pulses in milliseconds
@@ -30,34 +32,37 @@
 // 20 ms servo update period - 40000 tacts
 #define TIMER1_TOP 40000
 
-// Arm/Disarm button
-#define BUTTON_ARM_PIN 3
-#define BUTTON_ARM_REG PIND
-#define BUTTON_ARM_FLAG PIND3
-
 // Servo control button
-#define BUTTON_SRV_PIN 4
+#define BUTTON_SRV_PIN 3
 #define BUTTON_SRV_REG PIND
-#define BUTTON_SRV_FLAG PIND4
+#define BUTTON_SRV_FLAG PIND3
+
+// Arm/Disarm button
+#define BUTTON_ARM_PIN 4
+#define BUTTON_ARM_REG PIND
+#define BUTTON_ARM_FLAG PIND4
 
 // Button state update interval
 #define BUTTON_UPDATE_INTERVAL 50 // 50 ms
 
 // Max/Min values for servo input and output in misroseconds
-#define SERVO_MAX 2000
-#define SERVO_MIN 1000
+#define SERVO_MAX 2100
+#define SERVO_MIN 900
 
+// Servo state LED
+#define SRV_LED_PIN 6
+CLedController servoLedController( SRV_LED_PIN );
 
-
-
-
-
+// Arm/Disarm LED
+#define ARM_LED_PIN 7
+CLedController armLedController( ARM_LED_PIN );
 
 #define LED_PIN 13
 CLedController ledController( LED_PIN );
 
-// constants won't change :
-long interval = 1000;
+// LED state update interval
+// We dont need to blink faster than 10 times a second, so 50 ms is enough
+#define LED_UPDATE_INTERVAL 50 // 50 ms
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Button processing
@@ -90,7 +95,7 @@ void setServoOut( unsigned int servoValue )
 	{
 		// resolution is 0,5 mks so multiply by 2
 		SRV_OUT_REG = 2 * min( max( servoValue, SERVO_MIN ), SERVO_MAX );
-	}	
+	}
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -153,11 +158,13 @@ volatile bool hasHeartbeat = false;
 inline void onHeatbeatCapture()
 {
 	ledController.TurnOn();
+	setServoOut( SERVO_MAX );
 }
 
 inline void onHeartbeatLost()
 {
 	ledController.BlinkConstantly( 250 );
+	setServoOut( SERVO_MIN );
 }
 
 inline void processHeartbeat()
@@ -199,6 +206,18 @@ inline void processHeartbeat()
 	// remember time of first pulse in sequence
 	if( pulsesStartMillis == 0 ) {
 		pulsesStartMillis = currentMillis;
+	}
+}
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Pass captured ESC input to ESC output or Servo output
+
+void passThroughEscInput()
+{
+	if( hasHeartbeat ) {
+		setEscOut( escInput );
+	} else {
+		setEscOut( SERVO_MIN );
 	}
 }
 
@@ -276,8 +295,8 @@ void setupPinChangeInterrupt()
 		
 		// digital pins 3 (PCINT19), 4 (PCINT20), 5 (PCINT21) correspond to pin change interrupt 2
 		PCICR |= _BV( PCIE2 ); // enable pin change interrupt 2
-		PCMSK2 |= _BV( PCINT19 ); // enable interrupt on PCINT19 pin (Arm/Disarm button)
-		PCMSK2 |= _BV( PCINT20 ); // enable interrupt on PCINT20 pin (Servo button)
+		PCMSK2 |= _BV( PCINT19 ); // enable interrupt on PCINT19 pin (Servo button)
+		PCMSK2 |= _BV( PCINT20 ); // enable interrupt on PCINT20 pin (Arm/Disarm button)
 		PCMSK2 |= _BV( PCINT21 ); // enable interrupt on PCINT21 pin (Heatbeat input)
 	}
 }
@@ -285,16 +304,20 @@ void setupPinChangeInterrupt()
 // Main setup
 void setup() 
 {
-	pinMode( LED_PIN, OUTPUT );
-	
 	pinMode( ESC_IN_PIN, INPUT );
 	pinMode( HEARTBEAT_IN_PIN, INPUT_PULLUP );
 	pinMode( ESC_OUT_PIN, OUTPUT );
+	digitalWrite( ESC_OUT_PIN, LOW );
 	pinMode( SRV_OUT_PIN, OUTPUT );
+	digitalWrite( SRV_OUT_PIN, LOW );
 
 	pinMode( BUTTON_ARM_PIN, INPUT_PULLUP );
 	pinMode( BUTTON_SRV_PIN, INPUT_PULLUP );
-			
+
+	pinMode( SRV_LED_PIN, OUTPUT );
+	pinMode( ARM_LED_PIN, OUTPUT );
+	pinMode( LED_PIN, OUTPUT );
+
 	setupTimer1();
 	setupPinChangeInterrupt();
 
@@ -309,13 +332,16 @@ void loop()
 {
 	unsigned long currentMillis = millis();
 
-	// LED blink
-	static unsigned long previousMillis = currentMillis;
-	if(currentMillis - previousMillis >= interval) {
+	// Update LED state
+	static unsigned long prevLedUpdate = currentMillis;
+	if( currentMillis - prevLedUpdate >= LED_UPDATE_INTERVAL ) {
+		servoLedController.UpdateState( currentMillis );
+		armLedController.UpdateState( currentMillis );
 		ledController.UpdateState( currentMillis );
+		prevLedUpdate = currentMillis;
 	}
 
-	// update heartbeat state
+	// Update heartbeat state
 	static unsigned long prevHeartbeatUpdate = currentMillis;
 	if( currentMillis - prevHeartbeatUpdate >= HEARTBEAT_UPDATE_INTERVAL ) {
 		prevHeartbeatUpdate= currentMillis;
@@ -323,6 +349,13 @@ void loop()
 		{
 			processHeartbeat();
 		}
+	}
+
+	// Update and pass through ESC input
+	static unsigned long prevEscInUpdate = currentMillis;
+	if( currentMillis - prevEscInUpdate >= ESC_IN_UPDATE_INTERVAL ) {
+		passThroughEscInput();
+		prevEscInUpdate = currentMillis;
 	}
 
 	// update button state
@@ -338,51 +371,24 @@ void loop()
 
 		if( armButtonPress ) {
 			Serial.print( "Arm press.\r\n" );
-			ledController.TurnOn();
-			/*unsigned int sinp = 0;
-			int ov = 0;
-			ATOMIC_BLOCK( ATOMIC_RESTORESTATE )
-			{
-			sinp = escInput;
-			ov = overflowCount;
-			}
-			setEscOut( sinp );
-			Serial.print( "Servo input: " );
-			Serial.print( sinp );
-			Serial.print( "\r\n" );
-			Serial.print( ov );
-			Serial.print( "\r\n" );*/
+			armLedController.Switch();
 			armButtonPress = false;
 		}
 		if( armButtonLongPress ) {
 			Serial.print( "Arm long press.\r\n" );
-			ledController.BlinkConstantly( 500 );
+			armLedController.BlinkConstantly( 500 );
 			armButtonLongPress = false;
 		}
 
 		if( servoButtonPress ) {
 			Serial.print( "Servo press.\r\n" );
-			ledController.BlinkShort( 100, 6 );
-			/*unsigned int sinp = 0;
-			int ov = 0;
-			ATOMIC_BLOCK( ATOMIC_RESTORESTATE )
-			{
-			sinp = escInput;
-			ov = overflowCount;
-			}
-			setServoOut( sinp );
-			Serial.print( "Servo input: " );
-			Serial.print( sinp );
-			Serial.print( "\r\n" );
-			Serial.print( ov );
-			Serial.print( "\r\n" );*/
+			servoLedController.Switch();
 			servoButtonPress = false;
 		}
 		if( servoButtonLongPress ) {
 			Serial.print( "Servo long press.\r\n" );
-			ledController.TurnOff();
+			servoLedController.BlinkConstantly( 300 );
 			servoButtonLongPress = false;
 		}
-
 	}
 }

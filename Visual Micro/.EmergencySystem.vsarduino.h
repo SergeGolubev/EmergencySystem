@@ -86,6 +86,7 @@ inline void processEscInput();
 inline void onHeatbeatCapture();
 inline void onHeartbeatLost();
 inline void processHeartbeat();
+void passThroughEscInput();
 void setupTimer1();
 void setupPinChangeInterrupt();
 //

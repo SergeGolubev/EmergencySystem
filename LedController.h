@@ -10,6 +10,7 @@ public:
 	// fuctions to control LED state
 	void TurnOn();
 	void TurnOff();
+	void Switch();
 	void BlinkConstantly( int intervalMillis );
 	void BlinkShort( int intervalMillis, int blinkCount );
 

@@ -23,6 +23,11 @@ void CLedController::TurnOff()
 	shortBlinkChangeCount = 0;
 }
 
+void CLedController::Switch()
+{
+	digitalWrite( ledPin, !digitalRead( ledPin ) );
+}
+
 void CLedController::BlinkConstantly( int intervalMillis )
 {
 	blinkInterval = intervalMillis;
