@@ -80,12 +80,19 @@ extern "C" void __cxa_pure_virtual() {;}
 #define portInputRegister(P)
 #define portModeRegister(P)
 
+unsigned int readEEPROM( int address );
+void writeEEPROM( int address, unsigned int value );
+inline unsigned int restrictServoValue( unsigned int servoValue );
 void setEscOut( unsigned int escValue );
 void setServoOut( unsigned int servoValue );
 inline void processEscInput();
 inline void onHeatbeatCapture();
 inline void onHeartbeatLost();
 inline void processHeartbeat();
+inline void onArmButtonPress();
+inline void onArmButtonLongPress();
+inline void onServoButtonPress();
+inline void onServoButtonLongPress();
 void passThroughEscInput();
 void setupTimer1();
 void setupPinChangeInterrupt();

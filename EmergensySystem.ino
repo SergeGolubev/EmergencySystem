@@ -1,4 +1,5 @@
 #include <util/atomic.h>
+#include <EEPROM.h>
 #include "ButtonWatcher.h"
 #include "LedController.h"
 
@@ -57,23 +58,55 @@ CLedController servoLedController( SRV_LED_PIN );
 #define ARM_LED_PIN 7
 CLedController armLedController( ARM_LED_PIN );
 
-#define LED_PIN 13
-CLedController ledController( LED_PIN );
-
 // LED state update interval
-// We dont need to blink faster than 10 times a second, so 50 ms is enough
-#define LED_UPDATE_INTERVAL 50 // 50 ms
+#define LED_UPDATE_INTERVAL 10 // 10 ms
+
+// EEPROM addresses
+#define ESC_MIN_ADDRESS 0 // min ECS out value
+#define SERVO_OPEN_ADDRESS sizeof( int ) // servo open position
+#define SERVO_CLOSE_ADDRESS 2 * sizeof( int ) // servo close position
+
+// servo and ESC calibration values
+unsigned int servoOpenPos = SERVO_MIN;
+unsigned int servoClosePos = SERVO_MAX;
+unsigned int escMinPos = SERVO_MIN;
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////
-// Button processing
 
-volatile bool armButtonPress = false;
-volatile bool armButtonLongPress = false;
-static CButtonWatcher armDisarmButtonWatcher( &armButtonPress, &armButtonLongPress );
+unsigned int readEEPROM( int address )
+{
+	byte hi = EEPROM.read( address );
+	byte lo = EEPROM.read( address + 1 );
+	return word( hi, lo );
+}
 
-volatile bool servoButtonPress = false;
-volatile bool servoButtonLongPress = false;
-static CButtonWatcher servoButtonWatcher( &servoButtonPress, &servoButtonLongPress );
+void writeEEPROM( int address, unsigned int value )
+{
+	EEPROM.write( address, highByte( value ) );
+	EEPROM.write( address + 1, lowByte( value ) );
+}
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+inline unsigned int restrictServoValue( unsigned int servoValue )
+{
+	return min( max( servoValue, SERVO_MIN ), SERVO_MAX );
+}
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Operation state
+
+enum TState {
+	S_DISARM_OPEN,
+	S_DISARM_CLOSE,
+	S_ARMED,
+	S_FIRED,
+	S_CAL_ESC,
+	S_CAL_OPEN,
+	S_CAL_CLOSE
+};
+
+TState state = S_DISARM_OPEN;
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Output PWM control
@@ -84,7 +117,7 @@ void setEscOut( unsigned int escValue )
 	ATOMIC_BLOCK( ATOMIC_RESTORESTATE )
 	{
 		// resolution is 0,5 mks so multiply by 2
-		ESC_OUT_REG = 2 * min( max( escValue, SERVO_MIN ), SERVO_MAX );
+		ESC_OUT_REG = 2 * restrictServoValue( escValue );
 	}
 }
 
@@ -94,7 +127,7 @@ void setServoOut( unsigned int servoValue )
 	ATOMIC_BLOCK( ATOMIC_RESTORESTATE )
 	{
 		// resolution is 0,5 mks so multiply by 2
-		SRV_OUT_REG = 2 * min( max( servoValue, SERVO_MIN ), SERVO_MAX );
+		SRV_OUT_REG = 2 * restrictServoValue( servoValue );
 	}
 }
 
@@ -145,7 +178,7 @@ inline void processEscInput()
 		// if pulse is neither too long nor to short - update input value
 		if( pulseLen < SERVO_MAX * 4 && pulseLen > SERVO_MIN ) {
 			// restrict the value anyway
-			escInput = min( max( pulseLen / 2, SERVO_MIN ), SERVO_MAX );
+			escInput = restrictServoValue( pulseLen / 2 );
 		}		
 	}
 }
@@ -157,14 +190,17 @@ volatile bool hasHeartbeat = false;
 
 inline void onHeatbeatCapture()
 {
-	ledController.TurnOn();
-	setServoOut( SERVO_MAX );
 }
 
 inline void onHeartbeatLost()
 {
-	ledController.BlinkConstantly( 250 );
-	setServoOut( SERVO_MIN );
+	if( state == S_ARMED ) {
+		setEscOut( escMinPos ); // block motor
+		setServoOut( servoOpenPos ); // fire parachute
+		armLedController.BlinkConstantly( 400 );
+		servoLedController.TurnOff();
+		state = S_FIRED;
+	}	
 }
 
 inline void processHeartbeat()
@@ -176,10 +212,7 @@ inline void processHeartbeat()
 	// check if heartbeat is lost
 	if( prevPulseMillis != 0 && currentMillis - prevPulseMillis > HEARTBEAT_TIMEOUT ) {
 		// too long time passed from prev pulse
-		if( hasHeartbeat ) {
-			hasHeartbeat = false;
-			onHeartbeatLost();
-		}
+		hasHeartbeat = false;
 		prevPulseMillis = 0;
 		pulsesStartMillis = 0;
 	}
@@ -198,9 +231,7 @@ inline void processHeartbeat()
 
 	if( !hasHeartbeat && pulsesStartMillis != 0 && currentMillis - pulsesStartMillis > HEARTBEAT_CAPTURE_TIMEOUT ) {
 		// have heartbeat pulses for long enough time
-		// report heartbeat capture
 		hasHeartbeat = true;
-		onHeatbeatCapture();
 	}
 
 	// remember time of first pulse in sequence
@@ -210,14 +241,117 @@ inline void processHeartbeat()
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Button processing
+
+volatile bool armButtonPress = false;
+volatile bool armButtonLongPress = false;
+static CButtonWatcher armDisarmButtonWatcher( &armButtonPress, &armButtonLongPress );
+
+volatile bool servoButtonPress = false;
+volatile bool servoButtonLongPress = false;
+static CButtonWatcher servoButtonWatcher( &servoButtonPress, &servoButtonLongPress );
+
+inline void onArmButtonPress()
+{
+	// we can arm only from S_DISARM_CLOSE if heartbeat signal is present
+	// if this condition is not met - blink LED quickly as a warning
+	if( state != S_ARMED && state != S_FIRED && ( state != S_DISARM_CLOSE || !hasHeartbeat ) ) {
+		armLedController.BlinkShort( 100, 5 );
+	}
+}
+
+inline void onArmButtonLongPress()
+{
+	
+	switch( state ) {
+		case S_DISARM_CLOSE:
+			// arm if servo is closed and we have heartbeat
+			if( hasHeartbeat ) {
+				armLedController.TurnOn();
+				state = S_ARMED;
+			}
+			break;
+		case S_ARMED: 
+			// disarm to S_DISARM_CLOSE
+			setEscOut( escMinPos );
+			armLedController.TurnOff();
+			state = S_DISARM_CLOSE;
+			break;
+		case S_FIRED:
+			// disarm to S_DISARM_OPEN
+			setEscOut( escMinPos );
+			armLedController.TurnOff();
+			state = S_DISARM_OPEN;
+			break;
+	}
+}
+
+inline void onServoButtonPress()
+{
+	switch( state ) {
+		case S_DISARM_OPEN:
+			// close servo
+			setServoOut( servoClosePos );
+			servoLedController.TurnOn();
+			state = S_DISARM_CLOSE;
+			break;
+			
+		case S_DISARM_CLOSE:
+			// open servo
+			setServoOut( servoOpenPos );
+			servoLedController.TurnOff();
+			state = S_DISARM_OPEN;
+			break;
+		case S_CAL_ESC:
+			// remember esc min pos and go to servo open pos calibration
+			servoLedController.BlinkShort( 100, 5 );
+			escMinPos = escInput;
+			writeEEPROM( ESC_MIN_ADDRESS, escMinPos );
+			state = S_CAL_OPEN;
+			break;
+
+		case S_CAL_OPEN:
+			// remember servo open pos
+			servoLedController.BlinkShort( 100, 5 );
+			servoOpenPos = escInput;
+			writeEEPROM( SERVO_OPEN_ADDRESS, servoOpenPos );
+			state = S_CAL_CLOSE;
+			break;
+
+		case S_CAL_CLOSE: 
+			// remember servo close pos
+			servoLedController.TurnOn();
+			servoLedController.BlinkShort( 100, 5 );
+			servoClosePos = escInput;
+			writeEEPROM( SERVO_CLOSE_ADDRESS, servoClosePos );
+			state = S_DISARM_CLOSE;
+			break;			
+	}
+}
+
+inline void onServoButtonLongPress()
+{
+	if( state == S_DISARM_OPEN || state == S_DISARM_CLOSE ) {
+		// switch to ESC min pos calibration mode
+		servoLedController.BlinkConstantly( 800 );
+		servoLedController.BlinkShort( 100, 5 );
+		state = S_CAL_ESC;
+	}
+}
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Pass captured ESC input to ESC output or Servo output
 
 void passThroughEscInput()
 {
-	if( hasHeartbeat ) {
+	// if armed or in ESC min pos calibration - pass ESC input to ESC output
+	if( state == S_ARMED || state == S_CAL_ESC ) {
 		setEscOut( escInput );
-	} else {
-		setEscOut( SERVO_MIN );
+	}
+
+	// calibration - pass ESC input to Servo output
+	if( state == S_CAL_OPEN || state == S_CAL_CLOSE ) {
+		setServoOut( escInput );
 	}
 }
 
@@ -274,8 +408,8 @@ void setupTimer1()
 		// set TOP value
 		ICR1 = TIMER1_TOP;
 
-		OCR1A = SERVO_MIN * 2;
-		OCR1B = SERVO_MIN * 2;
+		ESC_OUT_REG = escMinPos * 2;
+		SRV_OUT_REG = servoOpenPos * 2;
 
 		// enable timer overflow interrupt
 		// this timer counter is also used to measure ESC input pulses
@@ -316,13 +450,17 @@ void setup()
 
 	pinMode( SRV_LED_PIN, OUTPUT );
 	pinMode( ARM_LED_PIN, OUTPUT );
-	pinMode( LED_PIN, OUTPUT );
+	
+	// read saved EEPROM values
+	escMinPos = restrictServoValue( readEEPROM( ESC_MIN_ADDRESS ) );
+	servoOpenPos = restrictServoValue( readEEPROM( SERVO_OPEN_ADDRESS ) );
+	servoClosePos = restrictServoValue( readEEPROM( SERVO_CLOSE_ADDRESS ) );
 
 	setupTimer1();
 	setupPinChangeInterrupt();
 
-	Serial.begin( 9600 );
-	Serial.print( "Finished setup\r\n" );
+	//Serial.begin( 9600 );
+	//Serial.print( "Finished setup\r\n" );
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -337,18 +475,25 @@ void loop()
 	if( currentMillis - prevLedUpdate >= LED_UPDATE_INTERVAL ) {
 		servoLedController.UpdateState( currentMillis );
 		armLedController.UpdateState( currentMillis );
-		ledController.UpdateState( currentMillis );
 		prevLedUpdate = currentMillis;
 	}
 
 	// Update heartbeat state
 	static unsigned long prevHeartbeatUpdate = currentMillis;
+	static bool prevHasHeartbeat = false;
 	if( currentMillis - prevHeartbeatUpdate >= HEARTBEAT_UPDATE_INTERVAL ) {
 		prevHeartbeatUpdate= currentMillis;
 		ATOMIC_BLOCK( ATOMIC_RESTORESTATE ) 
 		{
 			processHeartbeat();
 		}
+		if( !prevHasHeartbeat && hasHeartbeat ) {
+			onHeatbeatCapture();
+		}
+		if( prevHasHeartbeat && !hasHeartbeat ) {
+			onHeartbeatLost();
+		}
+		prevHasHeartbeat = hasHeartbeat;
 	}
 
 	// Update and pass through ESC input
@@ -358,7 +503,7 @@ void loop()
 		prevEscInUpdate = currentMillis;
 	}
 
-	// update button state
+	// Update button state
 	static unsigned long prevButtonUpdate = currentMillis;
 	if( currentMillis - prevButtonUpdate >= BUTTON_UPDATE_INTERVAL ) {
 		prevButtonUpdate = currentMillis;
@@ -369,25 +514,25 @@ void loop()
 			servoButtonWatcher.UpdateButtonState( !bit_is_set( BUTTON_SRV_REG, BUTTON_SRV_FLAG ) );
 		}
 
+		// Process button presses
 		if( armButtonPress ) {
-			Serial.print( "Arm press.\r\n" );
-			armLedController.Switch();
+			//Serial.print( "Arm press.\r\n" );
+			onArmButtonPress();
 			armButtonPress = false;
 		}
 		if( armButtonLongPress ) {
-			Serial.print( "Arm long press.\r\n" );
-			armLedController.BlinkConstantly( 500 );
+			//Serial.print( "Arm long press.\r\n" );
+			onArmButtonLongPress();
 			armButtonLongPress = false;
 		}
-
 		if( servoButtonPress ) {
-			Serial.print( "Servo press.\r\n" );
-			servoLedController.Switch();
+			//Serial.print( "Servo press.\r\n" );
+			onServoButtonPress();
 			servoButtonPress = false;
 		}
 		if( servoButtonLongPress ) {
-			Serial.print( "Servo long press.\r\n" );
-			servoLedController.BlinkConstantly( 300 );
+			//Serial.print( "Servo long press.\r\n" );
+			onServoButtonLongPress();
 			servoButtonLongPress = false;
 		}
 	}
