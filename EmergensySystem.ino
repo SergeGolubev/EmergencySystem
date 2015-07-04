@@ -58,6 +58,10 @@ CLedController servoLedController( SRV_LED_PIN );
 #define ARM_LED_PIN 7
 CLedController armLedController( ARM_LED_PIN );
 
+// On-board LED
+#define BOARD_LED_PIN 13
+CLedController boardLedController( BOARD_LED_PIN );
+
 // LED state update interval
 #define LED_UPDATE_INTERVAL 10 // 10 ms
 
@@ -190,10 +194,12 @@ volatile bool hasHeartbeat = false;
 
 inline void onHeatbeatCapture()
 {
+	boardLedController.TurnOn();
 }
 
 inline void onHeartbeatLost()
 {
+	boardLedController.TurnOff();
 	if( state == S_ARMED ) {
 		setEscOut( escMinPos ); // block motor
 		setServoOut( servoOpenPos ); // fire parachute
@@ -450,6 +456,7 @@ void setup()
 
 	pinMode( SRV_LED_PIN, OUTPUT );
 	pinMode( ARM_LED_PIN, OUTPUT );
+	pinMode( BOARD_LED_PIN, OUTPUT );
 	
 	// read saved EEPROM values
 	escMinPos = restrictServoValue( readEEPROM( ESC_MIN_ADDRESS ) );
@@ -475,6 +482,7 @@ void loop()
 	if( currentMillis - prevLedUpdate >= LED_UPDATE_INTERVAL ) {
 		servoLedController.UpdateState( currentMillis );
 		armLedController.UpdateState( currentMillis );
+		boardLedController.UpdateState( currentMillis );
 		prevLedUpdate = currentMillis;
 	}
 
